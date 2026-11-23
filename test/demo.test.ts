@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { TransactionHash, TransactionStatusEnum } from "@concordium/web-sdk";
 import {
   decodePaymentRequiredHeader, decodePaymentResponseHeader, encodePaymentSignatureHeader,
 } from "@x402/core/http";
 import { encodeCommitments } from "../src/audit.js";
-import { NETWORK } from "../src/chain.js";
+import { NETWORK, waitForFinalization } from "../src/chain.js";
 import { dataset, rank } from "../src/evidence.js";
 import { pay, PURCHASE, quote, withPaidResource } from "../src/payments.js";
 import { tokenBadge } from "../src/registry.js";
@@ -17,6 +18,19 @@ const mockTransaction = "01".repeat(32);
 const stubClient = {
   createPaymentPayload: async () => ({ x402Version: 2, payload: { transportTest: true } }),
 };
+
+test("finalization propagates node errors and bounds pending waits", async () => {
+  const hash = TransactionHash.fromHexString(mockTransaction);
+  for (const getBlockItemStatus of [
+    async () => ({ status: TransactionStatusEnum.Received as const }),
+    async () => { throw Object.assign(new Error("Unknown transaction"), { code: "NOT_FOUND" }); },
+  ]) {
+    await assert.rejects(waitForFinalization({ getBlockItemStatus }, hash, 0), /Finalization timed out/);
+  }
+  await assert.rejects(waitForFinalization({
+    async getBlockItemStatus() { throw new Error("Connection refused"); },
+  }, hash, 0), /Connection refused/);
+});
 
 test("evidence ranking removes duplicate and future claims and can escalate", () => {
   const brief = rank(dataset);

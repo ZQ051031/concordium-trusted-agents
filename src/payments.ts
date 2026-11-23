@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
+import { TransactionHash, TransactionKindString, TransactionSummaryType } from "@concordium/web-sdk";
 import { ExactConcordiumScheme as Seller } from "@x402/concordium/exact/server";
 import { ExactConcordiumScheme as Buyer } from "@x402/concordium/exact/client";
 import { ExactConcordiumScheme as Facilitator } from "@x402/concordium/exact/facilitator";
@@ -9,7 +10,7 @@ import {
   encodePaymentRequiredHeader, encodePaymentResponseHeader, encodePaymentSignatureHeader,
 } from "@x402/core/http";
 import type { PaymentPayload, PaymentRequirements, SettleResponse } from "@x402/core/types";
-import { host, port, isHash, NETWORK, sameAccount, txLink, type Wallet } from "./chain.js";
+import { host, port, isHash, NETWORK, sameAccount, txLink, waitForFinalization, type Node, type Wallet } from "./chain.js";
 
 export const PURCHASE = "150000"; // 0.15 test CCD
 export const SALE = "250000"; // 0.25 test CCD
@@ -18,11 +19,32 @@ export function buyer(wallet: Wallet) {
   return new Buyer(wallet, { grpcUrl: `${host}:${port}`, useTls: true });
 }
 
-export function facilitator(wallet: Wallet) {
+export function facilitator(node: Node, wallet: Wallet) {
   const signer = toConcordiumFacilitatorSigner(wallet.accountAddress.toString(), wallet.signer, {
     host, port: Number(port), useTls: true, network: NETWORK,
   });
-  return new Facilitator({ signer, requireFinalization: true, finalizationTimeoutMs: 60_000 });
+  return new Facilitator({
+    signer: {
+      ...signer,
+      async waitForFinalization(txHash, timeoutMs = 60_000) {
+        const outcome = await waitForFinalization(node, TransactionHash.fromHexString(txHash), timeoutMs);
+        const summary = outcome.summary;
+        if (summary?.type !== TransactionSummaryType.AccountTransaction ||
+            summary.transactionType !== TransactionKindString.Transfer) {
+          throw new Error(`Expected a finalized CCD transfer at ${txLink(txHash)}`);
+        }
+        return {
+          txHash, status: "finalized",
+          sender: summary.sender.toString(),
+          recipient: summary.transfer.to.toString(),
+          amount: summary.transfer.amount.microCcdAmount.toString(),
+          asset: CCD_ASSET_IDENTIFIER,
+        };
+      },
+    },
+    requireFinalization: true,
+    finalizationTimeoutMs: 60_000,
+  });
 }
 
 export async function quote(payTo: string, amount: string, feePayer: string): Promise<PaymentRequirements> {

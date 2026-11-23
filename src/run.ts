@@ -125,7 +125,7 @@ export async function demo(
     }
   }
 
-  const gateway = facilitator(sponsorWallet);
+  const gateway = facilitator(node, sponsorWallet);
   const journal: Journal = {
     network: NETWORK, address, badge, tokenId: verified.tokenId, owner, card: verified.card,
     cardHash: verified.cardHash, reviewer, sponsor,

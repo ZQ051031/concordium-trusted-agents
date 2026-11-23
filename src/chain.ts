@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   AccountAddress, AccountTransactionType, BlockHash, CcdAmount, ContractAddress, Energy,
   Parameter, ReceiveName, TransactionExpiry, TransactionHash, TransactionKindString,
@@ -47,6 +48,24 @@ export async function testnet() {
 
 export type Node = Awaited<ReturnType<typeof testnet>>;
 
+export async function waitForFinalization(
+  node: Pick<Node, "getBlockItemStatus">, hash: TransactionHash.Type, timeoutMs: number,
+) {
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    try {
+      const status = await node.getBlockItemStatus(hash);
+      if (status.status === "finalized") return status.outcome;
+    } catch (error) {
+      // A just-submitted transaction may not be visible to the queried node yet.
+      if ((error as { code?: string }).code !== "NOT_FOUND") throw error;
+    }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new Error(`Finalization timed out at ${txLink(hash.toString())}`);
+    await delay(Math.min(1000, remaining));
+  }
+}
+
 export async function ownerCredential(node: Node, owner: string) {
   const { accountCredentials } = await node.getAccountInfo(AccountAddress.fromBase58(owner));
   const currentMonth = new Date().toISOString().slice(0, 7).replace("-", "");
@@ -75,7 +94,7 @@ export async function send(
   const sig = await signTransaction(transaction, wallet.signer);
   const hash = await node.sendAccountTransaction(transaction, sig);
   console.error(`Submitted ${txLink(hash.toString())}`);
-  const { summary } = await node.waitForTransactionFinalization(hash, 120_000);
+  const { summary } = await waitForFinalization(node, hash, 120_000);
   if (summary?.type !== TransactionSummaryType.AccountTransaction || summary.transactionType === TransactionKindString.Failed) {
     throw new Error(`Finalized transaction rejected at ${txLink(hash.toString())}`);
   }
