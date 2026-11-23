@@ -52,17 +52,30 @@ export async function waitForFinalization(
   node: Pick<Node, "getBlockItemStatus">, hash: TransactionHash.Type, timeoutMs: number,
 ) {
   const deadline = performance.now() + timeoutMs;
-  for (;;) {
-    try {
-      const status = await node.getBlockItemStatus(hash);
-      if (status.status === "finalized") return status.outcome;
-    } catch (error) {
-      // A just-submitted transaction may not be visible to the queried node yet.
-      if ((error as { code?: string }).code !== "NOT_FOUND") throw error;
+  const expired = new Error(`Finalization timed out at ${txLink(hash.toString())}`);
+  const timer = new AbortController();
+
+  async function poll() {
+    while (performance.now() < deadline) {
+      let status;
+      try {
+        status = await node.getBlockItemStatus(hash);
+      } catch (error) {
+        // A just-submitted transaction may not be visible to the queried node yet.
+        if ((error as { code?: string }).code !== "NOT_FOUND") throw error;
+      }
+      if (performance.now() >= deadline) break;
+      if (status?.status === "finalized") return status.outcome;
+      await delay(1000, undefined, { signal: timer.signal });
     }
-    const remaining = deadline - performance.now();
-    if (remaining <= 0) throw new Error(`Finalization timed out at ${txLink(hash.toString())}`);
-    await delay(Math.min(1000, remaining));
+    throw expired;
+  }
+
+  const timeout = delay(timeoutMs, undefined, { signal: timer.signal }).then(() => { throw expired; });
+  try {
+    return await Promise.race([poll(), timeout]);
+  } finally {
+    timer.abort();
   }
 }
 

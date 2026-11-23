@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { TransactionHash, TransactionStatusEnum } from "@concordium/web-sdk";
+import { BlockHash, TransactionHash, TransactionStatusEnum } from "@concordium/web-sdk";
 import {
   decodePaymentRequiredHeader, decodePaymentResponseHeader, encodePaymentSignatureHeader,
 } from "@x402/core/http";
@@ -21,15 +21,31 @@ const stubClient = {
 
 test("finalization propagates node errors and bounds pending waits", async () => {
   const hash = TransactionHash.fromHexString(mockTransaction);
-  for (const getBlockItemStatus of [
-    async () => ({ status: TransactionStatusEnum.Received as const }),
-    async () => { throw Object.assign(new Error("Unknown transaction"), { code: "NOT_FOUND" }); },
-  ]) {
-    await assert.rejects(waitForFinalization({ getBlockItemStatus }, hash, 0), /Finalization timed out/);
-  }
+  let calls = 0;
+  await assert.rejects(waitForFinalization({
+    async getBlockItemStatus() {
+      calls++;
+      throw Object.assign(new Error("Unknown transaction"), { code: "NOT_FOUND" });
+    },
+  }, hash, 25), /Finalization timed out/);
+  assert.equal(calls, 1);
   await assert.rejects(waitForFinalization({
     async getBlockItemStatus() { throw new Error("Connection refused"); },
-  }, hash, 0), /Connection refused/);
+  }, hash, 1000), /Connection refused/);
+});
+
+test("finalization times out while the status request is in flight", async () => {
+  const hash = TransactionHash.fromHexString(mockTransaction);
+  const finalized = {
+    status: TransactionStatusEnum.Finalized as const,
+    outcome: { blockHash: BlockHash.fromHexString(mockTransaction), summary: null },
+  };
+  let resolve!: (status: typeof finalized) => void;
+  const promise = new Promise<typeof finalized>(settle => { resolve = settle; });
+  const wait = waitForFinalization({ getBlockItemStatus: () => promise }, hash, 25);
+  await assert.rejects(wait, /Finalization timed out/);
+  resolve(finalized);
+  await assert.rejects(wait, /Finalization timed out/);
 });
 
 test("evidence ranking removes duplicate and future claims and can escalate", () => {
