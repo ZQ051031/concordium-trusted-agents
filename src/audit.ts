@@ -35,7 +35,7 @@ export async function deploy(node: Node, wallet: Wallet, tokenId: string) {
   try {
     await node.getModuleSource(ref);
   } catch (error) {
-    if ((error as { code?: number }).code !== 5) throw error;
+    if ((error as { code?: string }).code !== "NOT_FOUND") throw error;
     const deployment = await send(node, wallet, AccountTransactionType.DeployModule, { source: file });
     if (deployment.transactionType !== TransactionKindString.DeployModule ||
         deployment.moduleDeployed.contents.toString() !== ref.toString()) {
